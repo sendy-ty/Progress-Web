@@ -1,0 +1,8 @@
+gradio
+psycopg2-binary
+bcrypt
+ultralytics
+numpy
+reportlab
+pillow
+opencv-python-headless
