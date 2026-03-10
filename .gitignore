@@ -5,3 +5,6 @@ data/
 *.tif
 *.tiff
 .env
+data/uploads/*
+data/postgres/*
+data/reports/*
