@@ -7,7 +7,6 @@ class DashboardSummary(BaseModel):
     total_users: int
     total_images: int
     total_durian_trees_detected: int
-    average_detection_confidence: float | None
 
 
 class TrendItem(BaseModel):

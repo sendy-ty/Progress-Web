@@ -9,28 +9,47 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database.models import Image, User
-from app.utils.file_utils import atomic_write_bytes, ensure_dir, safe_uuid_filename
+from app.utils.file_utils import ensure_dir
 
 
-def build_public_url(stored_filename: str) -> str | None:
-    if not settings.public_upload_base_url:
-        return None
-    return f"{settings.public_upload_base_url.rstrip('/')}/{stored_filename}"
+def build_public_url(stored_filename: str) -> str:
+    base = settings.public_upload_base_url
+    if not base:
+        return f"/uploads/{stored_filename}"
+    return f"{base.rstrip('/')}/{stored_filename}"
 
 
-def save_upload(*, db: Session, user: User, original_filename: str, content_type: str | None, content: bytes) -> Image:
-    ensure_dir(settings.upload_dir)
-    stored_filename = safe_uuid_filename(original_filename)
-    abs_path = str(Path(settings.upload_dir) / stored_filename)
-    atomic_write_bytes(abs_path, content)
+def build_public_report_url(relative_path: str) -> str:
+    base = settings.public_reports_base_url
+    if not base:
+        return f"/reports/{relative_path.lstrip('/')}"
+    return f"{base.rstrip('/')}/{relative_path.lstrip('/')}"
 
+
+def save_upload_metadata(
+    *,
+    db: Session,
+    user: User,
+    original_filename: str,
+    content_type: str | None,
+    stored_filename: str,
+    file_path: str,
+    file_size_bytes: int,
+) -> Image:
+    """
+    Persist image metadata to the database only — performs NO file I/O.
+
+    The caller must stream the file to disk *before* calling this so that
+    file_size_bytes is accurate and the file already exists at file_path.
+    This replaces the old save_upload() which wrote an empty ghost file.
+    """
     img = Image(
         user_id=user.id,
         original_filename=original_filename,
         stored_filename=stored_filename,
         content_type=content_type,
-        file_size_bytes=len(content),
-        file_path=abs_path,
+        file_size_bytes=file_size_bytes,
+        file_path=file_path,
     )
     db.add(img)
     db.commit()
@@ -67,4 +86,3 @@ def delete_image(*, db: Session, user: User, image_id: int) -> None:
     finally:
         db.delete(img)
         db.commit()
-

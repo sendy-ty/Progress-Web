@@ -9,15 +9,12 @@ from app.database.models import Detection, Image, User
 def summary(*, db: Session) -> dict:
     total_users = db.execute(select(func.count(User.id))).scalar_one()
     total_images = db.execute(select(func.count()).select_from(Image)).scalar_one()
-
-    total_detections = db.execute(select(func.count()).select_from(Detection)).scalar_one()
-    avg_conf = db.execute(select(func.avg(Detection.confidence))).scalar_one()
+    total_trees = db.execute(select(func.coalesce(func.sum(Detection.tree_count), 0)).select_from(Detection)).scalar_one()
 
     return {
         "total_users": int(total_users),
         "total_images": int(total_images),
-        "total_durian_trees_detected": int(total_detections),
-        "average_detection_confidence": float(avg_conf) if avg_conf is not None else None,
+        "total_durian_trees_detected": int(total_trees),
     }
 
 
@@ -54,10 +51,20 @@ def latest_images(*, db: Session, user: User, limit: int) -> list[dict]:
         .all()
     )
 
-    # N+1 is okay at small sizes; keep simple. Can be optimized with a grouped query later.
+    # N+1 is okay at small sizes; use latest detection run's tree_count per image.
     out: list[dict] = []
     for img in imgs:
-        tree_count = db.execute(select(func.count()).select_from(Detection).where(Detection.image_id == img.id)).scalar_one()
+        row = (
+            db.execute(
+                select(Detection.tree_count)
+                .where(Detection.image_id == img.id)
+                .order_by(Detection.created_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        tree_count = row[0] if row else 0
         out.append(
             {
                 "image_id": img.id,

@@ -19,4 +19,4 @@ RUN pip install --no-cache-dir \
     python-multipart \
     opencv-python-headless
 
-CMD ["uvicorn", "infer:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["uvicorn", "infer:app", "--host", "0.0.0.0", "--port", "8001"]

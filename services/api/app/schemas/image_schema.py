@@ -17,3 +17,8 @@ class ImagePublic(BaseModel):
     class Config:
         from_attributes = True
 
+
+class AnnotatedImagePublic(BaseModel):
+    image_id: int
+    annotated_url: str | None = Field(default=None, description="Public URL to annotated image if available")
+

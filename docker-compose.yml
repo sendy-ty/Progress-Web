@@ -9,6 +9,9 @@ services:
       - "8000:8000"
     volumes:
       - ./data/uploads:/app/data/uploads
+      - ./data/reports:/app/data/reports
+      - ./data/odm:/app/data/odm
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       DATABASE_URL: postgresql+psycopg2://webcount:webcount@postgres:5432/webcount
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME}
@@ -16,27 +19,108 @@ services:
       AUTO_CREATE_DB: ${AUTO_CREATE_DB:-true}
       UPLOAD_DIR: /app/data/uploads
       PUBLIC_UPLOAD_BASE_URL: ${PUBLIC_UPLOAD_BASE_URL:-http://localhost:8080/uploads}
+      PUBLIC_REPORTS_BASE_URL: ${PUBLIC_REPORTS_BASE_URL:-http://localhost:8080/reports}
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-${PWD}}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       ai-yolo:
         condition: service_started
+      odm:
+        condition: service_started
+      redis:
+        condition: service_started
     networks:
       - webcount_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Celery worker — detection, tile generation, PDF reports ──────────────
+  # Scale horizontally:  docker-compose up --scale celery-worker=N
+  # Or update replicas below for Swarm / Compose v3 deploy mode.
+  celery-worker:
+    build: ./services/api
+    restart: unless-stopped
+    # 4 concurrent threads per worker process; set CELERY_CONCURRENCY env to override
+    command: >
+      celery -A app.core.celery_app worker
+      --loglevel=info
+      --concurrency=${CELERY_CONCURRENCY:-4}
+      --pool=prefork
+      -Q celery
+    volumes:
+      - ./data/uploads:/app/data/uploads
+      - ./data/reports:/app/data/reports
+      - ./data/odm:/app/data/odm
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DATABASE_URL: postgresql+psycopg2://webcount:webcount@postgres:5432/webcount
+      UPLOAD_DIR: /app/data/uploads
+      PUBLIC_UPLOAD_BASE_URL: ${PUBLIC_UPLOAD_BASE_URL:-http://localhost:8080/uploads}
+      PUBLIC_REPORTS_BASE_URL: ${PUBLIC_REPORTS_BASE_URL:-http://localhost:8080/reports}
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-${PWD}}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - webcount_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    # Horizontal scaling:
+    #   docker-compose up --scale celery-worker=3
+    # Swarm deploy (uncomment for swarm mode):
+    # deploy:
+    #   replicas: 2
+    #   resources:
+    #     limits:
+    #       memory: 4G
+
+  # ── Celery Beat — scheduled periodic tasks (cleanup, etc.) ───────────────
+  celery-beat:
+    build: ./services/api
+    container_name: celery-beat
+    restart: unless-stopped
+    command: >
+      celery -A app.core.celery_app beat
+      --loglevel=info
+    volumes:
+      - ./data/uploads:/app/data/uploads
+      - ./data/reports:/app/data/reports
+      - ./data/odm:/app/data/odm
+    environment:
+      DATABASE_URL: postgresql+psycopg2://webcount:webcount@postgres:5432/webcount
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+    networks:
+      - webcount_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   ai-yolo:
     build: ./services/ai-yolo
     container_name: ai-yolo
     restart: unless-stopped
-    networks:
-      - webcount_net
-
-  gradio-ui:
-    build: ./services/gradio-ui
-    container_name: gradio-ui
-    restart: unless-stopped
     ports:
-      - "7860:7860"
+      - "8001:8001"
     networks:
       - webcount_net
 
@@ -48,10 +132,16 @@ services:
       - "8080:80"
     volumes:
       - ./data/uploads:/usr/share/nginx/html/uploads:ro
+      - ./data/reports:/usr/share/nginx/html/reports:ro
     depends_on:
       - api
     networks:
       - webcount_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   postgres:
     image: postgres:15
@@ -71,8 +161,30 @@ services:
     networks:
       - webcount_net
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # Persist Redis state across restarts so Celery task results survive
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redisdata:/data
+    networks:
+      - webcount_net
+
+  odm:
+    image: opendronemap/odm
+    container_name: odm
+    restart: "no"
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ./data/odm:/datasets
+    networks:
+      - webcount_net
+
 volumes:
   pgdata:
+  redisdata:
 
 networks:
   webcount_net:
